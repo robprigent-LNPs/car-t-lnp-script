@@ -2,8 +2,12 @@ name: CAR-T LNP Daily Analysis
 
 on:
   schedule:
-    - cron: '0 9 * * *'  # Exécution tous les jours à 9h00 UTC (10h00 en heure française en hiver)
-  workflow_dispatch:   # Permet de déclencher manuellement le workflow
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+# Il faut donner la permission d'écrire dans le dépôt
+permissions:
+  contents: write
 
 jobs:
   run-script:
@@ -28,3 +32,22 @@ jobs:
         ENTREZ_EMAIL: ${{ secrets.ENTREZ_EMAIL }}
         WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
       run: python main.py
+
+    # --- C'EST ICI QUE LA MAGIE OPÈRE ---
+    - name: Commit and Push changes
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+        # On ajoute les fichiers de mémoire
+        git add last_run.txt
+        # Ajoute aussi processed_ids.txt si tu as utilisé mon code Python précédent
+        git add processed_ids.txt 2>/dev/null || true 
+        
+        # On commit seulement s'il y a des changements
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-update: last run date and processed IDs"
+          git push
+        fi
