@@ -7,7 +7,7 @@ import os
 # Configuration
 Entrez.email = "robin.prigent@etu.univ-amu.fr"  # Obligatoire pour PubMed
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")  # Remplace par ta clé Mistral
-WEBHOOK_URL = "https://hook.eu1.make.com/xjs6uwedm6w3ufyu2j6becad80tfqcp0"  # Remplace par ton URL de webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Remplace par ton URL de webhook
 LAST_RUN_FILE = "last_run.txt"  # Fichier pour sauvegarder la dernière exécution
 
 def load_last_run_date():
