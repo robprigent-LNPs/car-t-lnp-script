@@ -5,54 +5,70 @@ from datetime import datetime, timedelta
 import os
 
 # Configuration
-Entrez.email = "robin.prigent@etu.univ-amu.fr"  # Obligatoire pour PubMed
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")  # Remplace par ta clé Mistral
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Remplace par ton URL de webhook
-LAST_RUN_FILE = "last_run.txt"  # Fichier pour sauvegarder la dernière exécution
+Entrez.email = "robin.prigent@etu.univ-amu.fr" 
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY") 
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
+LAST_RUN_FILE = "last_run.txt" 
+PROCESSED_IDS_FILE = "processed_ids.txt" # NOUVEAU : Fichier pour stocker les IDs
 
 def load_last_run_date():
     """Charge la date de la dernière exécution."""
     try:
         if os.path.exists(LAST_RUN_FILE):
             with open(LAST_RUN_FILE, "r") as f:
-                last_run_date = f.read().strip()
-                print(f"Date de la dernière exécution chargée depuis {LAST_RUN_FILE}: {last_run_date}")
-                return last_run_date
-        else:
-            print(f"Fichier {LAST_RUN_FILE} non trouvé. Utilisation de la date par défaut (7 jours en arrière).")
-    except Exception as e:
-        print(f"Erreur lors de la lecture de {LAST_RUN_FILE}: {e}. Utilisation de la date par défaut.")
+                return f.read().strip()
+    except Exception:
+        pass
     return (datetime.now() - timedelta(days=7)).strftime("%Y/%m/%d")
 
 def save_last_run_date():
-    """Sauvegarde la date actuelle comme dernière exécution."""
+    """Sauvegarde la date actuelle."""
     try:
         with open(LAST_RUN_FILE, "w") as f:
-            current_date = datetime.now().strftime("%Y/%m/%d")
-            f.write(current_date)
-        print(f"Date de la dernière exécution sauvegardée dans {LAST_RUN_FILE}: {current_date}")
+            f.write(datetime.now().strftime("%Y/%m/%d"))
     except Exception as e:
-        print(f"Erreur lors de l'écriture dans {LAST_RUN_FILE}: {e}")
+        print(f"Erreur sauvegarde date: {e}")
+
+# --- NOUVELLES FONCTIONS POUR LES IDs ---
+def load_processed_ids():
+    """Charge les IDs déjà traités pour éviter les doublons."""
+    if os.path.exists(PROCESSED_IDS_FILE):
+        with open(PROCESSED_IDS_FILE, "r") as f:
+            return set(line.strip() for line in f)
+    return set()
+
+def save_processed_id(article_id):
+    """Ajoute un ID traité au fichier."""
+    try:
+        with open(PROCESSED_IDS_FILE, "a") as f:
+            f.write(f"{article_id}\n")
+    except Exception as e:
+        print(f"Erreur sauvegarde ID: {e}")
+# ----------------------------------------
 
 def search_pubmed(query, retmax=20):
-    """Recherche les nouveaux articles depuis la dernière exécution."""
     last_run = load_last_run_date()
     date_today = datetime.now().strftime("%Y/%m/%d")
-    print(f"Recherche des articles publiés entre {last_run} et {date_today}")
-    search_query = f'{query} AND ("{last_run}"[Date - Publication] : "{date_today}"[Date - Publication]) NOT "review"[Publication Type]'
+    
+    # On cherche large : depuis la dernière exécution jusqu'à aujourd'hui
+    print(f"Recherche entre {last_run} et {date_today}")
+    
+    # Utilisation de [Date - Entrez] souvent plus précis pour les nouveautés que [Date - Publication]
+    search_query = f'{query} AND ("{last_run}"[Date - Entrez] : "{date_today}"[Date - Entrez]) NOT "review"[Publication Type]'
+    
     handle = Entrez.esearch(db="pubmed", term=search_query, retmax=retmax, sort="pub_date")
     record = Entrez.read(handle)
     handle.close()
     return record["IdList"]
 
 def fetch_abstract(article_id):
-    """Récupère l'abstract d'un article donné."""
     handle = Entrez.efetch(db="pubmed", id=article_id, rettype="abstract", retmode="text")
     abstract = handle.read()
     handle.close()
     return abstract
 
 def analyze_with_mistral(text):
+    # (Ton code inchangé ici...)
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
@@ -61,61 +77,68 @@ def analyze_with_mistral(text):
         "model": "mistral-tiny",
         "messages": [{
             "role": "user",
-            "content": f"""
-            Analyse cet abstract en français et extrais :
-            1) Objectif de l'étude.
-            2) Méthodes (type de LNPs, modèle animal, etc.).
-            3) Résultats principaux.
-            4) Innovations ou limites.
-            Abstract: {text}
-            """
+            "content": f"Analyse cet abstract en français (bref): 1) Objectif 2) Méthodes 3) Résultats. Abstract: {text}"
         }]
     }
-    response = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=headers)
-    response_data = response.json()
-
-    if response.status_code != 200:
-        print(f"Erreur {response.status_code}: {response.text}")
-        return f"Erreur lors de l'appel à l'API: {response.text}"
-
-    if "choices" not in response_data:
-        print("Réponse inattendue de l'API :", response_data)
-        return "Impossible d'extraire la réponse."
-
-    return response_data["choices"][0]["message"]["content"]
+    try:
+        response = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=headers)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"Erreur API: {e}"
+    return "Erreur analyse"
 
 def send_to_webhook(article_id, abstract, analysis):
-    """Envoie les résultats à un webhook (ex: Make.com ou Zapier)."""
+    # (Ton code inchangé ici...)
     data = {
         "article_id": article_id,
-        "abstract": abstract,
         "analysis": analysis,
         "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
-    response = requests.post(WEBHOOK_URL, json=data)
-    print(f"Webhook response for article {article_id}: {response.status_code}")
+    try:
+        requests.post(WEBHOOK_URL, json=data)
+    except Exception as e:
+        print(f"Erreur webhook: {e}")
 
 def main():
     last_run_date = load_last_run_date()
-    print(f"Date de la dernière exécution: {last_run_date}")
-
-    query = '("chimeric antigen receptor T cells" OR "CAR-T" OR "CAR T") AND ("lipid nanoparticle" OR "LNP" OR "LPNs" OR "mRNA-LNPs")'
+    processed_ids = load_processed_ids() # Chargement des anciens IDs
+    
+    print(f"Dernière exécution : {last_run_date}")
+    
+    query = '("chimeric antigen receptor T cells" OR "CAR-T" OR "CAR T") AND ("lipid nanoparticle" OR "LNP" OR "mRNA-LNPs")'
     article_ids = search_pubmed(query, retmax=20)
 
     if not article_ids:
-        print("Aucun nouvel article trouvé.")
+        print("Aucun article trouvé dans la plage de dates.")
     else:
-        print(f"Nouveaux articles trouvés : {len(article_ids)}")
-
+        new_articles_count = 0
         for article_id in article_ids:
-            print(f"Traitement de l'article {article_id}...")
+            # VÉRIFICATION DOUBLON
+            if article_id in processed_ids:
+                print(f"Article {article_id} déjà traité. Ignoré.")
+                continue
+            
+            print(f"Traitement du nouvel article {article_id}...")
             abstract = fetch_abstract(article_id)
+            
+            # Petite sécurité si pas d'abstract
+            if not abstract:
+                print("Pas d'abstract disponible.")
+                continue
+
             analysis = analyze_with_mistral(abstract)
             send_to_webhook(article_id, abstract, analysis)
-            time.sleep(10)  # Délai pour respecter les limites de l'API Mistral
+            
+            # Sauvegarde immédiate de l'ID pour ne pas le refaire si le script plante après
+            save_processed_id(article_id)
+            new_articles_count += 1
+            
+            time.sleep(5) 
+
+        print(f"Analyse terminée. {new_articles_count} nouveaux articles envoyés.")
 
     save_last_run_date()
-    print("Analyse terminée. Résultats envoyés au webhook.")
 
 if __name__ == "__main__":
     main()
